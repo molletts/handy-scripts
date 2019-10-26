@@ -1,0 +1,283 @@
+#!/bin/bash
+
+# cut-video v2.1
+# 2009-12-29 - v0.9 - Initial version
+# 2009-12-30 - v1.0 - Added 2-pass encoding, separator lines in output to improve readability
+#              v1.0a - Added normal/verbose mode and tidied up encoder command lines
+# 2010-12-27 - v2.0 - Substantial refactoring to allow multithreaded operation
+# 2011-04-30 - v2.1 - Switch to using FFmpeg instead of mencoder
+# 2017-12-03 - v2.1a - Add support for the Opus audio codec and multithreaded video encoding
+# 2017-12-08 - v2.1b - Add the framerate option
+
+# append_filter varname vf-string
+function append_filter
+{
+    if [ "${!1}" != "" ]; then
+        export $1="${!1},$2"
+    else
+	export $1="$2"
+    fi
+}
+
+if [ $# -lt 2 ]; then
+    cat <<EOF
+Usage: $0 [options] videofile editfile
+Options:
+-vcodec codec      Sets the video codec: "mpeg4" (default) or "h264"
+
+-vbitrate kbps     Sets the video bitrate in kbps (default 1250)
+
+-vquality qf       Selects VBR video encoding with quality factor qf
+
+-acodec codec      Sets the audio codec: "mp3" (default), "opus", "aac"
+                   or "copy" which copies the source audio unchanged
+                   Note: Opus in MP4 is experimental
+
+-abitrate kbps     Sets the audio bitrate in kbps (default 128 except
+                   for Opus which defaults to 96 as a VBR target rate)
+
+-aquality qf       Selects VBR audio encoding with quality factor qf
+
+-container cont    Selects the output container format: "avi" (default)
+                   or "mp4" (recommended with h264/aac)
+
+-crop w:h:x:y      Crops the input video to size w,h pixels
+                   offset by x,y
+
+-scale w:h         Scales the video to size w,h
+
+-framerate r       Sets the output framerate by dropping/duplicating
+                   frames as necessary
+
+-preview           Encodes 10-second segments at the start and end of
+                   each clip in the edit list to "name.preview-in.avi"
+                   and "name.preview-out.avi" for refining the timings
+
+-fast              Use faster, lower-quality video compression - ideal
+                   with -preview
+
+-skip-existing     Skip encoding where the output file appears to
+                   already exist - handy for refining a few timings
+                   with -preview
+
+-twopass           Use two-pass video encoding (ignored with -preview)
+
+-threads n         Use n threads for encoding (default 1)
+                   Default verbosity will be lower when more than one
+                   thread is in use
+
+-vcthreads n       Attempt to use n threads in the video codec (default 1)
+                   This is in addition to the encoding threads specified
+                   with the -threads option; each encoding thread will
+                   try to use up to n threads
+
+-verbose           Enable verbose encoder messages - not recommended
+                   when using more than one thread
+EOF
+    exit 1
+fi
+
+VB="-vb 1250k"
+AB="-ab 128k"
+VQUALITY=""
+AQUALITY=""
+FRAMERATE=""
+FAST=0
+PREVIEW=0
+SKIPEXISTING=0
+TWOPASS=0
+MSGFILTER="info"
+VCODEC="mpeg4"
+FOURCC="DX50"
+VCOPTS_FAST_MPEG4="-mbd simple -bf 2 -b_strategy 2 -flags -mv4-mv0-qpel-cbp"
+VCOPTS_HQ_MPEG4="-mbd rd -bf 2 -b_strategy 2 -bidir_refine 4 -flags +mv4+mv0+qpel+cbp -mbcmp dct -cmp dct -subcmp dct -dia_size 4 -pre_dia_size 4 -preme 2 -trellis 1 -last_pred 3 -qns 3"
+VCOPTS_FAST_H264="-preset fast"
+VCOPTS_HQ_H264="-preset veryslow -x264opts vbv-maxrate=20000:vbv-bufsize=30000:qcomp=0.9:qpmin=3:rc-lookahead=60:scenecut=40:keyint=360:me=umh:merange=48:subme=10:direct=auto:ref=4:b-pyramid=none:fast-pskip:b-adapt=2:bframes=3:trellis=2:psy-rd=1,1:deblock=0,0"
+ACODEC="libmp3lame"
+CONTAINER="avi"
+THREADS=1
+VCTHREADS=1
+VERBOSE=0
+DIVIDER="
+==========================================================================="
+SUBDIVIDER="---------------------------------------------------------------------------"
+
+GOTARGS=0
+while [ $GOTARGS -eq 0 ]; do
+    case "$1" in
+        -vbitrate )
+            VB="-vb $2k"
+            VQUALITY=""
+            shift 2
+            ;;
+        -vquality )
+            VQUALITY="$2"
+            shift 2
+            ;;
+        -vcodec )
+            if [ "$2" == "mpeg4" ]; then
+                VCODEC="mpeg4"
+                FOURCC="DX50"
+            elif [ "$2" == "h264" ]; then
+                VCODEC="libx264"
+                FOURCC="avc1"
+            else
+                echo "Unknown video codec $2"
+            fi
+            shift 2
+            ;;
+        -abitrate )
+            AB="-ab $2k"
+            AQUALITY=""
+            shift 2
+            ;;
+        -aquality )
+            AQUALITY="$2"
+            shift 2
+            ;;
+        -acodec )
+            if [ "$2" == "mp3" ]; then
+                ACODEC="libmp3lame"
+            elif [ "$2" == "aac" ]; then
+                ACODEC="aac"
+            elif [ "$2" == "copy" ]; then
+                ACODEC="copy"
+            elif [ "$2" == "opus" ]; then
+                ACODEC="libopus"
+                AB="-ab 96k"
+            else
+                echo "Unknown audio codec $2"
+            fi
+            shift 2
+            ;;
+        -container )
+            if [ "$2" == "avi" ]; then
+                CONTAINER="avi"
+            elif [ "$2" == "mp4" ]; then
+                CONTAINER="mp4"
+            else
+                echo "Unknown container format $2"
+            fi
+            shift 2
+            ;;
+        -crop )
+            CROP=$2
+            shift 2
+            ;;
+        -scale )
+            SCALE=$2
+            shift 2
+            ;;
+        -framerate )
+            FRAMERATE=$2
+            shift 2
+            ;;
+        -preview )
+            PREVIEW=1
+            shift 1
+            ;;
+        -fast )
+            FAST=1
+            shift 1
+            ;;
+        -skip-existing )
+            SKIPEXISTING=1
+            shift 1
+            ;;
+        -twopass )
+            TWOPASS=1
+            shift 1
+            ;;
+        -threads )
+            THREADS=$2
+            shift 2
+            ;;
+        -vcthreads )
+            VCTHREADS=$2
+            shift 2
+            ;;
+        -verbose )
+            VERBOSE=1
+            shift 1
+            ;;
+        * )
+            GOTARGS=1
+    esac
+done
+
+if [ $THREADS -gt 1 ]; then
+	MSGFILTER="error"
+	DIVIDER=""
+	SUBDIVIDER=""
+fi
+
+if [ "$VERBOSE" == "1" ]; then
+	MSGFILTER="verbose"
+fi
+
+if [ "$CROP" != "" ]; then
+    append_filter VFILTER "crop=$CROP"
+fi
+
+if [ "$SCALE" != "" ]; then
+    append_filter VFILTER "scale=$SCALE"
+fi
+
+if [ "$VFILTER" != "" ]; then
+    VF="-vf $VFILTER"
+fi
+
+if [ "$FAST" == "1" ]; then
+    if [ "$VCODEC" == "mpeg4" ]; then
+        VCOPTS="$VCOPTS_FAST_MPEG4"
+    else
+        VCOPTS="$VCOPTS_FAST_H264"
+    fi
+else
+    if [ "$VCODEC" == "mpeg4" ]; then
+        VCOPTS="$VCOPTS_HQ_MPEG4"
+    else
+        VCOPTS="$VCOPTS_HQ_H264"
+    fi
+fi
+
+if [ "$CONTAINER" == "mp4" -a "$ACODEC" == "libopus" ]; then
+    VCOPTS="-strict experimental $VCOPTS"
+fi
+
+VCOPTS="-threads $VCTHREADS $VCOPTS"
+
+if [ "$VQUALITY" != "" ]; then
+    if [ "$VCODEC" == "mpeg4" ]; then
+        VB="-q:v $VQUALITY"
+    else
+        VB="-crf $VQUALITY"
+    fi
+
+    if [ "$TWOPASS" == "1" ]; then
+        echo "VBR video encoding selected - disabling two-pass mode"
+        TWOPASS=0
+    fi
+fi
+
+if [ "$FRAMERATE" != "" ]; then
+    VCOPTS="-r $FRAMERATE $VCOPTS"
+fi
+
+if [ "$AQUALITY" != "" ]; then
+    AB="-q:a $AQUALITY"
+fi
+
+if [ "$ACODEC" == "libmp3lame" ]; then
+    AB="$AB -compression_level 0"
+fi
+
+if [ "$ACODEC" == "copy" ]; then
+    AB=""
+fi
+
+INFILE="$1"
+
+export PREVIEW SKIPEXISTING MSGFILTER VB VCODEC FOURCC AB ACODEC VCOPTS VF INFILE DIVIDER SUBDIVIDER TWOPASS CONTAINER
+
+grep -v "^#" "$2" | xargs -d '\n' -P "$THREADS" -n 1 cut-video-threaded-helper

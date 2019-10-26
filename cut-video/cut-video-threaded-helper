@@ -1,0 +1,80 @@
+#!/bin/bash
+
+# cut-video-threaded-helper v2.1b
+# Helper program for cut-video v2.1b
+# v2.1b - Strip out metadata when transcoding
+
+if [ $# -lt 1 ]; then
+	echo "$0: This is a helper program for the threaded version of cut-video"
+	exit 1
+fi
+
+read START END TITLE <<<"$*"
+
+read STARTSECS DURATION PREVIEWEND <<<`awk -F : '
+{
+    startsecs = (60 * $1) + $2
+    endsecs = (60 * $3) + $4
+    duration = endsecs - startsecs
+    previewend = endsecs - 10
+
+    printf "%.3f %.3f %.3f",startsecs,duration,previewend
+}' <<<"$START:$END"`
+
+#echo STARTSECS=$STARTSECS DURATION=$DURATION PREVIEWEND=$PREVIEWEND
+
+if [ "$PREVIEW" == "1" ]; then
+    if ! [ "$SKIPEXISTING" == "1" -a -f "$TITLE.preview-in.$CONTAINER" ]; then
+        # Encode first ten seconds
+        echo "$DIVIDER"
+        echo Encoding 10s preview from "$STARTSECS"s as "\"$TITLE.preview-in.$CONTAINER\""
+
+        ffmpeg -loglevel "$MSGFILTER" \
+            -accurate_seek -ss "$STARTSECS" -t 10 -i "$INFILE" \
+            -map_metadata -1 \
+            -vcodec "$VCODEC" $VB -vtag "$FOURCC" \
+            -acodec "$ACODEC" $AB $VCOPTS $VF "$TITLE.preview-in.$CONTAINER"
+    fi
+
+    if ! [ "$SKIPEXISTING" == "1" -a -f "$TITLE.preview-out.$CONTAINER" ]; then
+        # Encode last ten seconds
+        echo "$DIVIDER"
+        echo Encoding 10s preview from "$PREVIEWEND"s as "\"$TITLE.preview-out.$CONTAINER\""
+
+        ffmpeg -loglevel "$MSGFILTER" \
+            -accurate_seek -ss "$PREVIEWEND" -t 10 -i "$INFILE" \
+            -map_metadata -1 \
+            -vcodec "$VCODEC" $VB -vtag "$FOURCC" \
+            -acodec "$ACODEC" $AB $VCOPTS $VF "$TITLE.preview-out.$CONTAINER"
+    fi
+else
+    if ! [ "$SKIPEXISTING" == "1" -a -f "$TITLE.$CONTAINER" ]; then
+        # Encode the entire clip
+        echo "$DIVIDER"
+        echo Encoding "$DURATION"s from "$STARTSECS"s as "\"$TITLE.$CONTAINER\""
+        if [ "$TWOPASS" == "1" ]; then
+            # First pass, turbo mode
+            echo \* Pass 1 of 2 for "\"$TITLE.$CONTAINER\""
+
+            ffmpeg -loglevel "$MSGFILTER" \
+                -accurate_seek -ss "$STARTSECS" -t "$DURATION" -i "$INFILE" \
+                -map_metadata -1 \
+                -vcodec "$VCODEC" $VB -vtag "$FOURCC" -pass 1 \
+                -an $VCOPTS $VF -passlogfile "$TITLE" -f rawvideo -y "/dev/null"
+
+            echo "$SUBDIVIDER"
+            echo \* Pass 2 of 2 for "\"$TITLE.$CONTAINER\""
+            PASSOPT="-pass 2"
+        else
+            PASSOPT=""
+        fi
+
+        ffmpeg -loglevel "$MSGFILTER" \
+            -accurate_seek -ss "$STARTSECS" -t "$DURATION" -i "$INFILE" \
+            -map_metadata -1 \
+            -vcodec "$VCODEC" $VB -vtag "$FOURCC" $PASSOPT \
+            -acodec "$ACODEC" $AB $VCOPTS $VF "$TITLE.$CONTAINER"
+    fi
+fi
+
+echo Finished encoding "\"$TITLE\""

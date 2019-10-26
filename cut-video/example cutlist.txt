@@ -1,0 +1,5 @@
+# Each line represents a section to be extracted from the source video and
+# encoded to a separate file. The times are in the form min:sec
+# start-time end-time name
+00:12 10:33 Scene 1
+10:37.5 17:20 Scene 2
