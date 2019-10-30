@@ -8,6 +8,7 @@ import argparse
 import pathlib
 import string
 import csv
+from datetime import datetime, timezone
 
 # Speed things up by using an HTTP session
 session = requests.Session()
@@ -100,6 +101,12 @@ def get_album_list(groupname, cookiejar):
                                 "name":         album["albumName"],
                                 "creator":      album["creatorNickname"],
                                 "description":  album["description"],
+                                "created":      datetime.fromtimestamp(
+                                                    album["creationDate"],
+                                                    timezone.utc),
+                                "modified":     datetime.fromtimestamp(
+                                                    album["modificationDate"],
+                                                    timezone.utc),
                                 "photos":       int(album["total"]) })
 
     return albums
@@ -110,11 +117,14 @@ def list_albums_long(albums):
         print("Album name:    " + album["name"])
         print("Description:   " + album["description"])
         print("Created by:    " + album["creator"])
+        print("Creation time: " + str(album["created"]))
+        print("Last modified: " + str(album["modified"]))
         print("No. of photos: " + str(album["photos"]))
 
 def list_albums_csv(albums, filename):
     with open(filename, 'w', newline='') as csvfile:
-        fields = [ "ID", "name", "description", "creator", "photos" ]
+        fields = [ "ID", "name", "description", "creator", "created",
+                   "modified", "photos" ]
 
         writer = csv.DictWriter(csvfile, fieldnames = fields)
         writer.writeheader()
@@ -170,6 +180,12 @@ def get_photo_list_album(groupname, cookiejar, albumid):
                                     "description":  "" if "description" \
                                                        not in photo
                                                     else photo["description"],
+                                    "created":      datetime.fromtimestamp(
+                                                        photo["creationDate"],
+                                                        timezone.utc),
+                                    "modified":     datetime.fromtimestamp(
+                                                        photo["modificationDate"],
+                                                        timezone.utc),
                                     "height":       photoInfo["height"],
                                     "width":        photoInfo["width"],
                                     "filesize":     photoInfo["size"],
@@ -214,6 +230,12 @@ def get_photo_list_group(groupname, cookiejar):
                                 "creator":      photo["creatorNickname"],
                                 "description":  "" if "description" not in photo
                                                 else photo["description"],
+                                "created":      datetime.fromtimestamp(
+                                                    photo["creationDate"],
+                                                    timezone.utc),
+                                "modified":     datetime.fromtimestamp(
+                                                    photo["modificationDate"],
+                                                    timezone.utc),
                                 "height":       photoInfo["height"],
                                 "width":        photoInfo["width"],
                                 "filesize":     photoInfo["size"],
@@ -223,23 +245,25 @@ def get_photo_list_group(groupname, cookiejar):
 
 def list_photos_long(photos, show_album_id = False):
     for photo in photos:
-        print("\nPhoto ID:    " + str(photo["ID"]))
+        print("\nPhoto ID:      " + str(photo["ID"]))
         if show_album_id:
-            print("Album ID:    " + str(photo["albumID"]))
-        print("Photo name:  " + photo["name"])
-        print("Description: " + photo["description"])
-        print("Created by:  " + photo["creator"])
-        print("Height:      " + str(photo["height"]))
-        print("Width:       " + str(photo["width"]))
-        print("Filename:    " + photo["filename"])
-        print("Filetype:    " + photo["filetype"])
-        print("File size:   " + str(photo["filesize"]))
+            print("Album ID:      " + str(photo["albumID"]))
+        print("Photo name:    " + photo["name"])
+        print("Description:   " + photo["description"])
+        print("Created by:    " + photo["creator"])
+        print("Creation time: " + str(photo["created"]))
+        print("Last modified: " + str(photo["modified"]))
+        print("Height:        " + str(photo["height"]))
+        print("Width:         " + str(photo["width"]))
+        print("Filename:      " + photo["filename"])
+        print("Filetype:      " + photo["filetype"])
+        print("File size:     " + str(photo["filesize"]))
 
 def list_photos_csv(photos, filename):
     with open(filename, 'w', newline='') as csvfile:
         fields = [ "ID", "albumID", "name", "filename", "filetype",
-                   "description", "creator", "height", "width", "filesize",
-                   "url" ]
+                   "description", "creator", "created", "modified",
+                   "height", "width", "filesize", "url" ]
 
         writer = csv.DictWriter(csvfile, fieldnames = fields)
         writer.writeheader()
@@ -611,8 +635,8 @@ def main():
         if args.log_csv:
             csvfile = open(args.log_csv, 'w', newline='')
             fields = [ "ID", "albumID", "name", "yahoo_filename", "filetype",
-                   "description", "creator", "height", "width", "filesize",
-                   "result", "saved_filename" ]
+                   "description", "creator", "created", "modified", "height",
+                   "width", "filesize", "result", "saved_filename" ]
 
             logger = csv.DictWriter(csvfile,
                                     fieldnames = fields,
